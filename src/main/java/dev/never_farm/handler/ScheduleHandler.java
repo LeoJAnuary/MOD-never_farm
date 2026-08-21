@@ -5,9 +5,13 @@ import dev.never_farm.blockentity.WorkBlockEntity;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.LevelAccessor;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.level.ChunkEvent;
+import net.neoforged.neoforge.event.level.LevelEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 import java.util.ArrayList;
@@ -23,6 +27,28 @@ public class ScheduleHandler {
 	
 
 	private static final Map<ResourceKey<Level>, Long> LAST_DAY_TIME = new HashMap<>();
+
+	@SubscribeEvent
+	public static void onLevelUnload(LevelEvent.Unload event) {
+		LevelAccessor accessor = event.getLevel();
+		if (accessor instanceof Level level) {
+			LAST_DAY_TIME.remove(level.dimension());
+		}
+	}
+
+	@SubscribeEvent
+	public static void onChunkUnload(ChunkEvent.Unload event) {
+		LevelAccessor accessor = event.getLevel();
+		if (!(accessor instanceof Level level) || level.isClientSide || event.getChunk() == null) {
+			return;
+		}
+		Set<WorkBlockEntity> set = WorkBlockEntity.active().get(level.dimension());
+		if (set == null || set.isEmpty()) {
+			return;
+		}
+		ChunkPos cp = event.getChunk().getPos();
+		set.removeIf(be -> be.isRemoved() || new ChunkPos(be.getBlockPos()).equals(cp));
+	}
 
 	@SubscribeEvent
 	public static void onServerTick(ServerTickEvent.Post event) {

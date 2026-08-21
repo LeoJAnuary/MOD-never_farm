@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.Set;
 
 public final class AnimalUtil {
-	public static final String TAG_FED = "never_farm:fed";
+public static final String TAG_FED = "never_farm:fed";
 	public static final String TAG_LAST_FED_TIME = "never_farm:last_fed_time";
 	public static final String TAG_HOME_X = "never_farm:home_x";
 	public static final String TAG_HOME_Y = "never_farm:home_y";
@@ -30,7 +30,14 @@ public final class AnimalUtil {
 	
 
 	public static boolean isCollectable(Animal animal) {
-		if (animal.isBaby() || animal.hasCustomName() || !isFed(animal)) {
+		return isCollectable(animal, true);
+	}
+
+	public static boolean isCollectable(Animal animal, boolean requireFed) {
+		if (animal.isBaby() || animal.hasCustomName()) {
+			return false;
+		}
+		if (requireFed && !isFed(animal)) {
 			return false;
 		}
 		if (animal instanceof net.minecraft.world.entity.animal.Sheep sheep && sheep.isSheared()) {
@@ -63,49 +70,49 @@ public final class AnimalUtil {
 		return new AABB(minX, pos.getY(), minZ, maxX + 1.0D, top, maxZ + 1.0D);
 	}
 
-	private static Map<EntityType<?>, Set<Item>> foodsByType;
+	private static Map<EntityType<?>, Set<Item>> foodsByType = new HashMap<>();
 	private static Set<Item> allFoods;
 
-	private static void ensureFoods(Level level) {
-		if (foodsByType != null) {
-			return;
-		}
-		Map<EntityType<?>, Set<Item>> map = new HashMap<>();
-		Set<Item> foods = new HashSet<>();
-		for (EntityType<?> type : BuiltInRegistries.ENTITY_TYPE) {
-			Set<Item> typeFoods = new HashSet<>();
+	private static Set<Item> foodsFor(Level level, EntityType<?> type) {
+		return foodsByType.computeIfAbsent(type, t -> {
+			Set<Item> foods = new HashSet<>();
 			try {
-				Entity probe = type.create(level);
+				Entity probe = t.create(level);
 				if (!(probe instanceof Animal animal)) {
-					continue;
+					return foods;
 				}
 				for (Item item : BuiltInRegistries.ITEM) {
 					ItemStack stack = new ItemStack(item);
 					if (animal.isFood(stack)) {
-						typeFoods.add(item);
 						foods.add(item);
 					}
 				}
 				probe.discard();
 			} catch (Exception ignored) {
 			}
-			if (!typeFoods.isEmpty()) {
-				map.put(type, typeFoods);
-			}
+			return foods;
+		});
+	}
+
+	private static void ensureAllFoods(Level level) {
+		if (allFoods != null) {
+			return;
 		}
-		foodsByType = map;
-		allFoods = foods;
+		Set<Item> all = new HashSet<>();
+		for (EntityType<?> type : BuiltInRegistries.ENTITY_TYPE) {
+			all.addAll(foodsFor(level, type));
+		}
+		allFoods = all;
 	}
 
 	public static boolean isAnimalFood(Level level, ItemStack stack) {
-		ensureFoods(level);
+		ensureAllFoods(level);
 		return allFoods.contains(stack.getItem());
 	}
 
 	public static boolean isFoodFor(Level level, EntityType<?> type, ItemStack stack) {
-		ensureFoods(level);
-		Set<Item> foods = foodsByType.get(type);
-		return foods != null && foods.contains(stack.getItem());
+		Set<Item> foods = foodsFor(level, type);
+		return foods.contains(stack.getItem());
 	}
 
 	public static EntityType<?> parseEntityType(String id) {

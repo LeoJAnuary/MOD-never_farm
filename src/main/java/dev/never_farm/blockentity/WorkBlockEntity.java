@@ -40,7 +40,6 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
 import net.neoforged.neoforge.items.ItemStackHandler;
@@ -108,22 +107,20 @@ public class WorkBlockEntity extends BlockEntity implements Container, WorldlyCo
 	}
 
 	public static WorkBlockEntity findNearestFor(Level level, BlockPos pos, EntityType<?> type) {
-		ChunkPos cp = new ChunkPos(pos);
+		Set<WorkBlockEntity> set = ACTIVE.get(level.dimension());
+		if (set == null || set.isEmpty()) {
+			return null;
+		}
 		WorkBlockEntity best = null;
 		double bestDist = Double.MAX_VALUE;
-		for (int dx = -1; dx <= 1; dx++) {
-			for (int dz = -1; dz <= 1; dz++) {
-				ChunkAccess chunk = level.getChunk(cp.x + dx, cp.z + dz);
-				for (BlockPos bp : chunk.getBlockEntitiesPos()) {
-					BlockEntity be = chunk.getBlockEntity(bp);
-					if (be instanceof WorkBlockEntity wbe && wbe.canAbsorbType(type)) {
-						double d = be.getBlockPos().distSqr(pos);
-						if (d < bestDist) {
-							bestDist = d;
-							best = wbe;
-						}
-					}
-				}
+		for (WorkBlockEntity be : set) {
+			if (be.isRemoved() || be.level != level || !be.canAbsorbType(type)) {
+				continue;
+			}
+			double d = be.getBlockPos().distSqr(pos);
+			if (d < bestDist) {
+				bestDist = d;
+				best = be;
 			}
 		}
 		return best;
@@ -210,19 +207,31 @@ public class WorkBlockEntity extends BlockEntity implements Container, WorldlyCo
 	}
 
 	public List<Animal> detectedCollectable() {
+		return detectedCollectable(true);
+	}
+
+	public List<Animal> detectedCollectable(boolean requireFed) {
 		if (level == null || level.isClientSide) {
 			return List.of();
 		}
 		return level.getEntitiesOfClass(Animal.class, scanArea(),
-			a -> a.getY() >= worldPosition.getY() && AnimalUtil.isCollectable(a));
+			a -> a.getY() >= worldPosition.getY() && AnimalUtil.isCollectable(a, requireFed));
 	}
 
 	public int collectAll() {
+		return collectAll(true);
+	}
+
+	public int collectAllManual() {
+		return collectAll(false);
+	}
+
+	private int collectAll(boolean requireFed) {
 		if (level == null || level.isClientSide) {
 			return 0;
 		}
 		int collected = 0;
-		List<Animal> targets = detectedCollectable();
+		List<Animal> targets = detectedCollectable(requireFed);
 		if (boundType == null) {
 			targets.sort(Comparator.comparingDouble(a ->
 				a.distanceToSqr(worldPosition.getX() + 0.5D, worldPosition.getY() + 0.5D, worldPosition.getZ() + 0.5D)));
@@ -231,7 +240,7 @@ public class WorkBlockEntity extends BlockEntity implements Container, WorldlyCo
 			if (stored.size() >= maxSlots()) {
 				break;
 			}
-			if (tryCollectOne(animal, false)) {
+			if (tryCollectOne(animal, false, requireFed)) {
 				collected++;
 			}
 		}
@@ -243,10 +252,14 @@ public class WorkBlockEntity extends BlockEntity implements Container, WorldlyCo
 	}
 
 	public boolean tryCollectOne(Animal animal, boolean force) {
+		return tryCollectOne(animal, force, true);
+	}
+
+	private boolean tryCollectOne(Animal animal, boolean force, boolean requireFed) {
 		if (level == null || level.isClientSide || animal == null) {
 			return false;
 		}
-		if (!force && !AnimalUtil.isCollectable(animal)) {
+		if (!force && !AnimalUtil.isCollectable(animal, requireFed)) {
 			return false;
 		}
 		if (boundType == null) {
@@ -279,15 +292,19 @@ public class WorkBlockEntity extends BlockEntity implements Container, WorldlyCo
 		if (stored.size() >= maxSlots()) {
 			return false;
 		}
-		animal.setAge(0);
 		stored.add(serializeAnimal(animal, true));
 		animal.discard();
 		return true;
 	}
 
 	private CompoundTag serializeAnimal(Animal animal, boolean locked) {
+		animal.resetLove();
+		EntityType<?> serializedType = animal.getType();
+		// fed = 要被收起的永久标记：第一次被方块收起（任何路径）就打上，
+		// 之后日出放出、日落自动收回，标记不清除
+		animal.getPersistentData().putBoolean(AnimalUtil.TAG_FED, true);
 		CompoundTag tag = animal.saveWithoutId(new CompoundTag());
-		tag.putString("id", EntityType.getKey(animal.getType()).toString());
+		tag.putString("id", EntityType.getKey(serializedType).toString());
 		if (locked) {
 			tag.putBoolean(AnimalUtil.TAG_LOCKED, true);
 		}
@@ -348,19 +365,6 @@ public class WorkBlockEntity extends BlockEntity implements Container, WorldlyCo
 			return;
 		}
 		Entity entity = opt.get();
-		BlockPos above = worldPosition.above();
-		double x = above.getX() + 0.5D + (level.random.nextDouble() - 0.5D) * 0.5D;
-		double y = above.getY();
-		double z = above.getZ() + 0.5D + (level.random.nextDouble() - 0.5D) * 0.5D;
-		entity.setPos(x, y, z);
-		entity.setDeltaMovement(
-			(level.random.nextDouble() - 0.5D) * 0.3D,
-			0.28D,
-			(level.random.nextDouble() - 0.5D) * 0.3D);
-
-		if (entity instanceof Animal animal) {
-			animal.setAge(0);
-		}
 
 		boolean starving = tag.getBoolean(AnimalUtil.TAG_STARVING);
 		if (starving && entity instanceof Mob mob) {
@@ -370,6 +374,32 @@ public class WorkBlockEntity extends BlockEntity implements Container, WorldlyCo
 					BuiltInRegistries.MOB_EFFECT.wrapAsHolder(effect), Config.dsDebuffDuration * 20, 0));
 			}
 		}
+
+		// 释放出去的动物：fed 标签是"要被收起"的永久标记，表示它归方块管理，
+		// 日落时靠它自动收回（日出放、日落收）。只清挨饿状态，
+		// 否则日出放出、日落收不回，等于只有放没有收。
+		entity.getPersistentData().remove(AnimalUtil.TAG_STARVING);
+		tag.remove(AnimalUtil.TAG_STARVING);
+		if (entity instanceof Animal animal) {
+			// 清除原版繁育状态（InLove 恋爱 tick），否则释放出来仍是恋爱中，
+			// 立即再交配 → BabyEntitySpawnEvent 强收 → 日出释放 → 无限循环
+			animal.resetLove();
+			// 仅对"成年且无冷却"的补繁殖冷却（正值 = 冷却 tick），
+			// 防止释放后立刻再次交配被收；幼年子代保持原样继续成长，
+			// 已带冷却的保留原冷却
+			if (animal.getAge() >= 0 && animal.getAge() < 6000) {
+				animal.setAge(6000);
+			}
+		}
+		BlockPos above = worldPosition.above();
+		double x = above.getX() + 0.5D + (level.random.nextDouble() - 0.5D) * 0.5D;
+		double y = above.getY();
+		double z = above.getZ() + 0.5D + (level.random.nextDouble() - 0.5D) * 0.5D;
+		entity.setPos(x, y, z);
+		entity.setDeltaMovement(
+			(level.random.nextDouble() - 0.5D) * 0.3D,
+			0.28D,
+			(level.random.nextDouble() - 0.5D) * 0.3D);
 
 		if (Config.enableAIRestrict && entity instanceof Mob mob) {
 			CompoundTag data = mob.getPersistentData();
@@ -473,14 +503,14 @@ boolean absorbed = false;
 		}
 		ItemStack held = player.getItemInHand(hand);
 		if (!held.isEmpty()) {
-			boolean isFood = AnimalUtil.isAnimalFood(level, held)
-				|| (boundType != null && AnimalUtil.isFoodFor(level, boundType, held));
+			boolean isFood = (boundType != null && AnimalUtil.isFoodFor(level, boundType, held))
+				|| AnimalUtil.isAnimalFood(level, held);
 			if (isFood) {
 				depositFeed(player, hand);
 				return;
 			}
 		}
-		int collected = collectAll();
+		int collected = collectAllManual();
 		if (player instanceof ServerPlayer sp) {
 			if (collected > 0) {
 				sp.displayClientMessage(
@@ -965,8 +995,10 @@ boolean absorbed = false;
 		if (stack.isEmpty() || level == null) {
 			return true;
 		}
-		return AnimalUtil.isAnimalFood(level, stack)
-			|| (boundType != null && AnimalUtil.isFoodFor(level, boundType, stack));
+		if (boundType != null && AnimalUtil.isFoodFor(level, boundType, stack)) {
+			return true;
+		}
+		return AnimalUtil.isAnimalFood(level, stack);
 	}
 
 	private class FeedHandler extends ItemStackHandler {

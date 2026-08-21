@@ -3,9 +3,6 @@ package dev.never_farm;
 import com.mojang.logging.LogUtils;
 import dev.never_farm.block.WorkBlock;
 import dev.never_farm.blockentity.WorkBlockEntity;
-import dev.never_farm.handler.BreedingHandler;
-import dev.never_farm.handler.InteractionHandler;
-import dev.never_farm.handler.ScheduleHandler;
 import dev.never_farm.network.NeverFarmNetworking;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -20,7 +17,6 @@ import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
-import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredHolder;
@@ -74,10 +70,6 @@ public class Never_farm {
 		modEventBus.register(NeverFarmNetworking.class);
 		modEventBus.addListener(NeverFarmModEvents::registerCapabilities);
 		modEventBus.addListener(NeverFarmModEvents::registerGameTests);
-
-		NeoForge.EVENT_BUS.register(ScheduleHandler.class);
-		NeoForge.EVENT_BUS.register(BreedingHandler.class);
-		NeoForge.EVENT_BUS.register(InteractionHandler.class);
 
 		modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
 	}

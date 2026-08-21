@@ -29,6 +29,8 @@ import net.minecraft.world.level.block.entity.HopperBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.gametest.GameTestHolder;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.entity.living.BabyEntitySpawnEvent;
 import net.neoforged.neoforge.items.IItemHandler;
 import net.neoforged.neoforge.items.ItemHandlerHelper;
 
@@ -104,6 +106,31 @@ public class WorkBlockGameTests {
 		int c2 = work.collectAll();
 		if (c2 != 0) {
 			helper.fail("sheep must not be collected into a cow-bound block");
+		}
+		helper.succeed();
+	}
+
+	@GameTest(template = "work_block_test")
+	public static void manualCollectDoesNotRequireFed(GameTestHelper helper) {
+		helper.setBlock(1, 1, 1, Never_farm.WORK_BLOCK.get());
+		WorkBlockEntity work = work(helper, 1, 1, 1);
+
+		cow(helper, 0, 1, 1, false);
+		cow(helper, 2, 1, 1, false);
+
+		int manual = work.collectAllManual();
+		if (manual != 2) {
+			helper.fail("manual collect should absorb unfed cows, got " + manual);
+		}
+		if (work.storedCount() != 2) {
+			helper.fail("stored should be 2 after manual collect, got " + work.storedCount());
+		}
+
+		cow(helper, 0, 1, 2, false);
+		cow(helper, 2, 1, 2, false);
+		int auto = work.collectAll();
+		if (auto != 0) {
+			helper.fail("auto collect must NOT absorb unfed cows, got " + auto);
 		}
 		helper.succeed();
 	}
@@ -627,6 +654,66 @@ public class WorkBlockGameTests {
 		if (work.feedCount() != 64) {
 			helper.fail("feed must not be consumed, got " + work.feedCount());
 		}
+		helper.succeed();
+	}
+
+	@GameTest(template = "work_block_test")
+	public static void breedingEventAbsorbsParentsAndChild(GameTestHelper helper) {
+		helper.setBlock(1, 1, 1, Never_farm.WORK_BLOCK.get());
+		WorkBlockEntity work = work(helper, 1, 1, 1);
+		Chicken a = helper.spawnWithNoFreeWill(EntityType.CHICKEN, new BlockPos(0, 1, 0));
+		Chicken b = helper.spawnWithNoFreeWill(EntityType.CHICKEN, new BlockPos(2, 1, 0));
+		Chicken child = helper.spawnWithNoFreeWill(EntityType.CHICKEN, new BlockPos(1, 2, 0));
+		AnimalUtil.markFed(a);
+		AnimalUtil.markFed(b);
+		NeoForge.EVENT_BUS.post(new BabyEntitySpawnEvent(a, b, child));
+		if (work.storedCount() != 3) {
+			helper.fail("breeding event must absorb 2 parents + 1 child, got " + work.storedCount());
+		}
+		if (work.boundType() != EntityType.CHICKEN || !work.isTypeLocked()) {
+			helper.fail("block should be bound and locked to chicken after forced absorb");
+		}
+		helper.succeed();
+	}
+
+	@GameTest(template = "work_block_test")
+	public static void releasedAnimalsLeaveTheHerd(GameTestHelper helper) {
+		helper.setBlock(1, 1, 1, Never_farm.WORK_BLOCK.get());
+		WorkBlockEntity work = work(helper, 1, 1, 1);
+		Chicken a = helper.spawnWithNoFreeWill(EntityType.CHICKEN, new BlockPos(0, 1, 0));
+		Chicken b = helper.spawnWithNoFreeWill(EntityType.CHICKEN, new BlockPos(2, 1, 0));
+		Chicken child = helper.spawnWithNoFreeWill(EntityType.CHICKEN, new BlockPos(1, 2, 0));
+		AnimalUtil.markFed(a);
+		AnimalUtil.markFed(b);
+		NeoForge.EVENT_BUS.post(new BabyEntitySpawnEvent(a, b, child));
+		if (work.storedCount() != 3) {
+			helper.fail("breeding event must absorb 2 parents + 1 child, got " + work.storedCount());
+		}
+
+		work.setThreshold(2);
+		work.releaseAtSunrise();
+		if (work.countLocked() != 0) {
+			helper.fail("locked marks must clear at sunrise, locked=" + work.countLocked());
+		}
+		tickReleases(helper, work);
+		if (work.storedCount() != 1) {
+			helper.fail("stored should drop to 1 after sunrise release, got " + work.storedCount());
+		}
+		int outside = helper.getLevel().getEntitiesOfClass(
+			Chicken.class, work.scanArea(), c -> !c.isRemoved()).size();
+		if (outside != 2) {
+			helper.fail("expected 2 chickens outside after release, got " + outside);
+		}
+
+		work.collectAllAtSunset();
+		if (work.storedCount() != 3) {
+			helper.fail("sunset must re-absorb released animals (managed kept), got " + work.storedCount());
+		}
+		if (helper.getLevel().getEntitiesOfClass(
+			Chicken.class, work.scanArea(), c -> !c.isRemoved()).size() != 0) {
+			helper.fail("released animals must be back inside after sunset");
+		}
+
 		helper.succeed();
 	}
 }
