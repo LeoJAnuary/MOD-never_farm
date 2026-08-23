@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "never_farm:block/work_block"
+    }
+  }
+}
